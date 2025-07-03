@@ -24,4 +24,8 @@ for t in range(T):
     plt.title(f"Phase {t} (slice {mid_slice})")
     plt.axis("off")
     plt.pause(0.1)                      # pause so you can see it
- 
+    # save
+    outname = f"viz/phase_{t:03d}.png"
+    plt.imsave(outname, frame, cmap="gray")
+
+plt.show()
