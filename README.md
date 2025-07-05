@@ -13,3 +13,10 @@ Very elegant method that uses principles of diffeomorphisms, Lie groups and Lie 
 
 
 This was an introduction to my thesis on adaptive radiotherapy and detection motion of mobile tumors by combining deep learning with stochastocial proccesses, differential geometry and topology. Some results are also presented for the different methods
+
+
+Dimensionality reduction:
+
+It is a must to have some dimensionality reduction for the problem at hand, especially if we want to do real time tracking. ROI tracking would already be one way of doing it. 
+
+Also using multiple 4DCTs of people to do principal component analysis would also be a good idea
