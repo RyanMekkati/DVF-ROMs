@@ -20,3 +20,6 @@ Dimensionality reduction:
 It is a must to have some dimensionality reduction for the problem at hand, especially if we want to do real time tracking. ROI tracking would already be one way of doing it. 
 
 Also using multiple 4DCTs of people to do principal component analysis would also be a good idea
+
+
+MULTIPLE 4DCT ON WHICH WE CALCULATE THE LDDMM FLOW, WE THEN EXTRACT PRINCIPAL COMPONENTS GIVING N VECTOR FIELDS. WE CAN THEN EXPONENTIATE THEM TO GET PRINCIPLE COMPONENTS OF DIFFEOMORPHISMS, AND MAYBE EXPRESS EACH TRANSFORMATION BY A COMPOSITION OF THOSE N DIFFEOS?!?!?!
