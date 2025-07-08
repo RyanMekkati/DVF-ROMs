@@ -1,6 +1,6 @@
 # DVF-Algorithms-2D-3D
 
-A motion detection algorithm in C++ that takes in input sequences of png files and shows the DVF of the sequence.
+A motion detection algorithm in C++ and applications to medical imaging.
 
 A few methods are used to be compared ultimately:
 
