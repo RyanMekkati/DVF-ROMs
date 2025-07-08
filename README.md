@@ -1,6 +1,6 @@
 # DVF-Algorithms-2D-3D
 
-A motion detection algorithm in C++ and applications to medical imaging.
+A motion detection algorithm in C++ using DVF's and applications to medical imaging.
 
 A few methods are used to be compared ultimately:
 
