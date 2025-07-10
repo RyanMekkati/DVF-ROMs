@@ -1,0 +1,37 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Create a regular grid on [0,1]×[0,1]
+n = 21
+x = np.linspace(0, 1, n)
+y = np.linspace(0, 1, n)
+X, Y = np.meshgrid(x, y)
+
+# Define a smooth warp φ: a simple sinusoidal displacement
+def phi(x, y):
+    # adjust amplitude/frequency here as you like
+    return x + 0.1 * np.sin(2 * np.pi * y), y + 0.1 * np.cos(2 * np.pi * x)
+
+# Apply φ to all grid points
+Xw, Yw = phi(X, Y)
+
+# Plot original grid (dashed) and warped grid (solid)
+plt.figure(figsize=(6,6))
+
+# Original grid lines
+for i in range(n):
+    plt.plot(X[i, :], Y[i, :], linestyle='--', color='gray', alpha=0.5)
+for j in range(n):
+    plt.plot(X[:, j], Y[:, j], linestyle='--', color='gray', alpha=0.5)
+
+# Warped grid lines
+for i in range(n):
+    plt.plot(Xw[i, :], Yw[i, :], color='C0')
+for j in range(n):
+    plt.plot(Xw[:, j], Yw[:, j], color='C0')
+
+plt.axis('equal')
+plt.title('Original (dashed) and Warped (solid) Grid')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
