@@ -12,6 +12,11 @@
 #include <itkImageToVTKImageFilter.h>
 #include <itkShrinkImageFilter.h>
 #include <itkRegionOfInterestImageFilter.h>
+#include <itkImageFileWriter.h>
+#include <itkImageRegionConstIterator.h>
+#include <filesystem>
+#include <fstream>
+const char* kDVFOutRoot = "/home/ryan/Documents/GitHub/DVF-Algorithms-2D-3D/DVF-data"; // répertoire de sortie DVF
 
 #include <vtkSmartPointer.h>
 #include <vtkImageData.h>
@@ -32,6 +37,20 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
     const std::string rootFolder = argv[1];
+    namespace fs = std::filesystem;
+    fs::path rootPath(rootFolder);
+    std::string patientID = rootPath.filename().string();
+    if (patientID.empty()) { patientID = rootPath.parent_path().filename().string(); }
+    fs::path outRoot(kDVFOutRoot);
+    fs::create_directories(outRoot / patientID);
+    fs::path manifestPath = outRoot / "dvf_manifest.csv";
+    std::ofstream manifestOfs;
+    bool manifestExists = fs::exists(manifestPath);
+    manifestOfs.open(manifestPath, std::ios::app);
+    if (!manifestExists) { manifestOfs << "patient,phase_from,phase_to,method,path_nifti\n"; }
+    const std::string methodTag = "DEMONS";
+
+    // NOTE: All DVFs saved relative to fixed phase volumes[t] -> volumes[t+1] as currently computed.
     bool useROI = (argc >= 8);
     itk::Index<3> roiIndex{};
     itk::Size<3> roiSize{};
@@ -39,11 +58,10 @@ int main(int argc, char* argv[])
         roiIndex[0] = std::stoi(argv[2]);
         roiIndex[1] = std::stoi(argv[3]);
         roiIndex[2] = std::stoi(argv[4]);
-        roiSize[0]  = std::stoi(argv[5]);
-        roiSize[1]  = std::stoi(argv[6]);
-        roiSize[2]  = std::stoi(argv[7]);
-        std::cout << "Using ROI: index="
-                  << roiIndex << " size=" << roiSize << std::endl;
+        roiSize [0] = std::stoi(argv[5]);
+        roiSize [1] = std::stoi(argv[6]);
+        roiSize [2] = std::stoi(argv[7]);
+        std::cout << "Utilisation d'un ROI index=" << roiIndex << " size=" << roiSize << std::endl;
     }
 
     const std::vector<std::string> phases =
@@ -79,19 +97,12 @@ int main(int argc, char* argv[])
         VolumeType::Pointer vol = reader->GetOutput();
         if (useROI) {
             ROIFilterType::Pointer roiFilter = ROIFilterType::New();
-            itk::ImageRegion<3> region;
-            region.SetIndex(roiIndex);
-            region.SetSize(roiSize);
-            roiFilter->SetRegionOfInterest(region);
             roiFilter->SetInput(vol);
+            roiFilter->SetRegionOfInterest(itk::ImageRegion<3>(roiIndex,roiSize));
             roiFilter->Update();
             vol = roiFilter->GetOutput();
         }
         volumes.push_back(vol);
-    }
-    if (volumes.size() < 2) {
-        std::cerr << "Need at least two phases to compute DVF." << std::endl;
-        return EXIT_FAILURE;
     }
 
     for (size_t t = 0; t+1 < volumes.size(); ++t) {
@@ -118,6 +129,27 @@ int main(int argc, char* argv[])
         demons->SetNumberOfIterations(20);
         demons->Update();
         DVFType::Pointer dvf = demons->GetOutput();
+        // === Sauvegarde DVF en NIfTI ===================================
+        {
+            using WriterType = itk::ImageFileWriter<DVFType>;
+            WriterType::Pointer writer = WriterType::New();
+            std::ostringstream oss;
+            oss << patientID << "_P" << phases[t] << "toP" << phases[t+1]
+                << "_dvf_" << methodTag << ".nii.gz";
+            fs::path outPath = outRoot / patientID / oss.str();
+            writer->SetFileName(outPath.string());
+            writer->SetInput(dvf);
+            writer->UseCompressionOn();
+            try { writer->Update(); }
+            catch (itk::ExceptionObject & err) {
+                std::cerr << "Erreur écriture DVF: " << outPath << " : " << err << std::endl;
+            }
+            // Append manifest row
+            manifestOfs << patientID << "," << phases[t] << "," << phases[t+1] << ","
+                        << methodTag << "," << outPath.string() << "\n";
+        }
+        // =================================================================
+
         // To VTK
         ITKtoVTKFilter::Pointer itk2vtk = ITKtoVTKFilter::New();
         itk2vtk->SetInput(dvf); itk2vtk->Update();
