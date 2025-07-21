@@ -1,7 +1,7 @@
 import torch
 import nibabel as nib
 import numpy as np
-from DVF_betaVAE import BetaVAE3D
+from VAE_model import BetaVAE3D
 
 # 1) Config
 device     = "cuda"
