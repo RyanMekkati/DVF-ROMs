@@ -95,6 +95,14 @@ int main(int argc, char* argv[])
     using ITKtoVTKFilter   = itk::ImageToVTKImageFilter<DVFType>;
     using ShrinkerType     = itk::ShrinkImageFilter<VolumeType,VolumeType>;
     using ROIFilterType    = itk::RegionOfInterestImageFilter<VolumeType,VolumeType>;
+    using TransformType        = itk::BSplineTransform<double,3,3>;
+    using OptimizerType        = itk::LBFGSBOptimizerv4;
+    using MetricType           = itk::MeanSquaresImageToImageMetricv4<VolumeType,VolumeType>;
+    using InterpolatorType     = itk::LinearInterpolateImageFunction<VolumeType,double>;
+    using RegistrationType     = itk::ImageRegistrationMethodv4<VolumeType,VolumeType>;
+    using DisplacementFilterType = itk::TransformToDisplacementFieldFilter<DVFType,double>;
+    using Writer               = itk::ImageFileWriter<DVFType>;
+
 
     // Standard phase labels for fallback
     const std::vector<std::string> phases =
@@ -185,97 +193,86 @@ int main(int argc, char* argv[])
             }
             volumes.push_back(vol);
         }
+    
+        // ——— B‑spline FFD registration ———
+        for (size_t t = 0; t + 1 < volumes.size(); ++t)
+        {
+        auto fixed  = volumes[t];
+        auto moving = volumes[t+1];
 
-    // ——— B‑spline FFD registration ———
-    // typedefs you’ll need, add these up near your other ITK aliases:
-    using TransformType = itk::BSplineTransform<double,3,3>;
-    using OptimizerType = itk::LBFGSBOptimizerv4;
-    using MetricType    = itk::MeanSquaresImageToImageMetricv4<VolumeType,VolumeType>;
-    using InterpolatorType = itk::LinearInterpolateImageFunction<VolumeType,double>;
-    using RegistrationType = itk::ImageRegistrationMethodv4<VolumeType,VolumeType>;
+        // 1) Set up the B‑spline transform domain  
+        TransformType::Pointer transform = TransformType::New();
 
-    // inside your t‑loop, replace the demons section with:
-
-    auto fixed  = volumes[t];
-    auto moving = volumes[t+1];
-
-    // 1) Set up the B‑spline transform domain  
-    TransformType::Pointer transform = TransformType::New();
-
-    // define grid spacing (in physical units) or mesh size:
-    TransformType::PhysicalDimensionsType physDim;
-    TransformType::MeshSizeType        meshSize;
-    for (unsigned int i=0; i<3; ++i) {
-    physDim[i]   = fixed->GetSpacing()[i] *
-                    static_cast<double>(fixed->GetLargestPossibleRegion().GetSize()[i]-1);
-    meshSize[i]  = 8; // try 8×8×8 control‑point grid (tune as needed)
-    }
-
-    transform->SetTransformDomainOrigin(   fixed->GetOrigin() );
-    transform->SetTransformDomainPhysicalDimensions( physDim );
-    transform->SetTransformDomainMeshSize( meshSize );
-    transform->SetTransformDomainDirection( fixed->GetDirection() );
-    transform->SetIdentity();
-
-    // 2) Set up optimizer
-    OptimizerType::Pointer optimizer = OptimizerType::New();
-    optimizer->SetGradientConvergenceTolerance(1e-5);
-    optimizer->SetLineSearchAccuracy(   0.9 );
-    optimizer->SetDefaultStepLength(   1.0 );
-    optimizer->SetMaximumNumberOfIterations(200);
-
-    // 3) Metric and interpolator
-    MetricType::Pointer metric = MetricType::New();
-    InterpolatorType::Pointer interp = InterpolatorType::New();
-
-    // 4) Registration method
-    RegistrationType::Pointer registration = RegistrationType::New();
-    registration->SetFixedImage(   fixed );
-    registration->SetMovingImage(  moving );
-    registration->SetInitialTransform( transform );
-    registration->SetMetric( metric );
-    registration->SetOptimizer( optimizer );
-    registration->SetInterpolator( interp );
-
-    // no multi‐resolution pyramid for now
-    registration->SetNumberOfLevels(1);
-
-    // 5) Run registration
-    try {
-    registration->Update();
-    } catch (const std::exception &e) {
-    std::cerr << "B‑spline registration failed: " << e.what() << std::endl;
-    continue;
-    }
-
-    // 6) Convert the resulting transform to a displacement field image
-    using DisplacementFilterType = itk::TransformToDisplacementFieldFilter<DVFType,double>;
-    auto dispFilter = DisplacementFilterType::New();
-    dispFilter->UseReferenceImageOn();
-    dispFilter->SetReferenceImage(fixed);  // sets size, spacing, origin, direction
-    dispFilter->SetTransform( registration->GetModifiableTransform() );
-    dispFilter->Update();
-    DVFType::Pointer dvf = dispFilter->GetOutput();
-
-    // 7) (unchanged) write dvf to disk
-    using Writer = itk::ImageFileWriter<DVFType>;
-    Writer::Pointer writer = Writer::New();
-    std::ostringstream oss;
-    oss << patientID << "_P" << t << "toP" << (t+1)
-        << "_bspline_dvf_" << methodTag << ".nii.gz";
-    auto out = outRoot / patientID / oss.str();
-    writer->SetFileName(out.string());
-    writer->SetInput(dvf);
-    writer->UseCompressionOn();
-    writer->Update();
-
-    // manifest logging
-    manifestOfs << patientID << "," << t << "," << (t+1)
-                << ",BSPLINE," << out.string() << "\n";
-
-    // VTK visualization (unchanged)…
-
+        TransformType::PhysicalDimensionsType physDim;
+        TransformType::MeshSizeType        meshSize;
+        for (unsigned int i = 0; i < 3; ++i) {
+            physDim[i]  = fixed->GetSpacing()[i] *
+                        static_cast<double>(fixed->GetLargestPossibleRegion()
+                                                .GetSize()[i] - 1);
+            meshSize[i] = 16;  // e.g. 16×16×16 control‐point grid (~30 mm spacing)
         }
+
+        transform->SetTransformDomainOrigin(           fixed->GetOrigin() );
+        transform->SetTransformDomainPhysicalDimensions( physDim );
+        transform->SetTransformDomainMeshSize(          meshSize );
+        transform->SetTransformDomainDirection(         fixed->GetDirection() );
+        transform->SetIdentity();
+
+        // 2) Optimizer
+        OptimizerType::Pointer optimizer = OptimizerType::New();
+        optimizer->SetGradientConvergenceTolerance(1e-5);
+        optimizer->SetLineSearchAccuracy(         0.9);
+        optimizer->SetDefaultStepLength(         1.0);
+        optimizer->SetMaximumNumberOfIterations(200);
+
+        // 3) Metric & interpolator
+        MetricType::Pointer       metric = MetricType::New();
+        InterpolatorType::Pointer interp = InterpolatorType::New();
+
+        // 4) Registration
+        RegistrationType::Pointer registration = RegistrationType::New();
+        registration->SetFixedImage(    fixed );
+        registration->SetMovingImage(   moving );
+        registration->SetInitialTransform(transform);
+        registration->SetMetric(        metric);
+        registration->SetOptimizer(     optimizer);
+        registration->SetInterpolator(  interp);
+        registration->SetNumberOfLevels(1);
+
+        // 5) Run
+        try {
+            registration->Update();
+        }
+        catch (const std::exception &e) {
+            std::cerr << "B‑spline registration failed: " << e.what() << std::endl;
+            continue;
+        }
+
+        // 6) Transform → DVF
+        auto dispFilter = DisplacementFilterType::New();
+        dispFilter->UseReferenceImageOn();
+        dispFilter->SetReferenceImage(fixed);
+        dispFilter->SetTransform( registration->GetModifiableTransform() );
+        dispFilter->Update();
+        DVFType::Pointer dvf = dispFilter->GetOutput();
+
+        // 7) Write NIfTI
+        Writer::Pointer writer = Writer::New();
+        std::ostringstream oss;
+        oss << patientID << "_P" << t << "toP" << (t+1)
+            << "_bspline_dvf_" << methodTag << ".nii.gz";
+        auto out = outRoot / patientID / oss.str();
+        writer->SetFileName(out.string());
+        writer->SetInput(dvf);
+        writer->UseCompressionOn();
+        writer->Update();
+        manifestOfs << patientID << "," << t << "," << (t+1)
+                    << ",BSPLINE," << out.string() << "\n";
+
+        // … your VTK visualization (gated by --viz) …
+        }
+
+    }
 
     return EXIT_SUCCESS;
 }
