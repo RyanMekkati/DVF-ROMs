@@ -1,72 +1,138 @@
-#!/usr/bin/env python3
+import os
+import glob
+import argparse
+import torch
 import nibabel as nib
 import numpy as np
 import matplotlib.pyplot as plt
+from VAE_model import BetaVAE3D  # adjust import if your class/module name differs
 
-# ———— CONFIG ————
-# Path to one of your real DVFs:
-real_path   = "/home/ryan/Documents/GitHub/DVF-Algorithms-2D-3D/DVF-data/4DCT-Dicom_P1/4DCT-Dicom_P1_P00toP10_dvf_DEMONS.nii.gz"
-# Path to your reconstructed DVF:
-recon_path  = "recon_dvf.nii.gz"
+def main():
+    parser = argparse.ArgumentParser(
+        description="Latent histograms & reconstruction accuracy"
+    )
+    parser.add_argument(
+        "--data_dir", required=True,
+        help="Directory of DVF .nii.gz files"
+    )
+    parser.add_argument(
+        "--checkpoint", required=True,
+        help="Path to trained VAE checkpoint (.pth)"
+    )
+    parser.add_argument(
+        "--latent_dim", type=int, default=4,
+        help="Dimensionality of the latent space"
+    )
+    parser.add_argument(
+        "--device", default="cuda",
+        help="cpu or cuda"
+    )
+    args = parser.parse_args()
 
-# ———— LOAD DATA ————
-# Real
-img_r   = nib.load(real_path)
-arr_r   = img_r.get_fdata(dtype=np.float32)  # (X,Y,Z,3)
-arr_r   = np.squeeze(arr_r)
-# Recon
-img_c   = nib.load(recon_path)
-arr_c   = img_c.get_fdata(dtype=np.float32)
-arr_c   = np.squeeze(arr_c)
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
 
-# ———— SELECT A SLICE ————
-Z = arr_r.shape[2]
-slice_idx = Z // 2
-slice_r = arr_r[:, :, slice_idx, :]  # (X,Y,3)
-slice_c = arr_c[:, :, slice_idx, :]  # (X,Y,3)
+    # Gather DVF files
+    file_list = sorted(glob.glob(os.path.join(args.data_dir, "*.nii.gz")))
+    if not file_list:
+        raise RuntimeError(f"No .nii.gz files found under {args.data_dir}")
 
-# ———— MAKE A GRID ————
-X, Y = slice_r.shape[:2]
-step = max(X // 64, 4)            # adjust density
-x = np.arange(0, X, step)
-y = np.arange(0, Y, step)
-Xg, Yg = np.meshgrid(x, y, indexing="ij")
+    # Infer input channels and spatial grid from first DVF
+    first_img = nib.load(file_list[0])
+    first = first_img.get_fdata(dtype=np.float32)
+    first = np.squeeze(first)
 
-# Vector components (just XY plane vectors)
-U_r = slice_r[x][:, y, 0]
-V_r = slice_r[x][:, y, 1]
-U_c = slice_c[x][:, y, 0]
-V_c = slice_c[x][:, y, 1]
+    # Dynamic shape handling
+    if first.ndim == 4:
+        # possible shapes: (C, D, H, W) or (D, H, W, C)
+        if first.shape[0] in (1, 3):
+            in_ch, D, H, W = first.shape
+        elif first.shape[-1] in (1, 3):
+            D, H, W, in_ch = first.shape
+        else:
+            raise ValueError(f"Unexpected 4D DVF shape: {first.shape}")
+    elif first.ndim == 3:
+        # assume channels last with implicit single DVF channel
+        in_ch = 1
+        D, H, W = first.shape
+    else:
+        raise ValueError(f"Unexpected DVF array shape: {first.shape}")
 
-# scale amplitudes by 3 for better visibility
-U_r *= 3
-V_r *= 3
-U_c *= 10
-V_c *= 10
+    # Build and load the model
+    model = BetaVAE3D(
+        in_ch=in_ch,
+        latent_dim=args.latent_dim,
+        grid=(D, H, W)
+    ).to(device)
+    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    model.eval()
 
-# ———— PLOT ————
-fig, ax = plt.subplots(figsize=(6,6))
-# background = real DVF magnitude
-mag = np.linalg.norm(slice_r, axis=-1).T  # transpose so origin='lower' is correct
-ax.imshow(mag, cmap="gray", origin="lower", alpha=0.6)
+    # Containers for results
+    latent_codes = []
+    mses = []
+    epe_means = []
 
-# original in blue
-ax.quiver(
-    Xg, Yg,
-    U_r.T, V_r.T,
-    color="blue", angles="xy", scale_units="xy", scale=1,
-    width=0.002, label="Original"
-)
-# reconstructed in red
-ax.quiver(
-    Xg, Yg,
-    U_c.T, V_c.T,
-    color="red",  angles="xy", scale_units="xy", scale=1,
-    width=0.002, label="Reconstructed"
-)
+    # Process each DVF file
+    for fpath in file_list:
+        img = nib.load(fpath)
+        arr = img.get_fdata(dtype=np.float32)
+        arr = np.squeeze(arr)
+        # Reorder channels to first if needed
+        if arr.ndim == 4 and arr.shape[-1] in (1, 3):
+            arr = np.moveaxis(arr, -1, 0)
 
-ax.set_title(f"DVF Vectors Comparison (slice {slice_idx})")
-ax.axis("off")
-ax.legend(loc="upper right")
-plt.tight_layout()
-plt.show()
+        tensor = torch.from_numpy(arr).unsqueeze(0).to(device)  # shape (1,C,D,H,W)
+        with torch.no_grad():
+            recon, mu, logvar = model(tensor)
+
+        recon = recon.cpu().numpy().squeeze(0)
+        mu = mu.cpu().numpy().squeeze(0)
+
+        # Compute reconstruction metrics
+        err_vec = recon - arr
+        mse = np.mean(err_vec ** 2)
+        epe_map = np.linalg.norm(err_vec, axis=0)
+        mean_epe = np.mean(epe_map)
+
+        latent_codes.append(mu)
+        mses.append(mse)
+        epe_means.append(mean_epe)
+
+    latent_codes = np.stack(latent_codes, axis=0)
+    mses = np.array(mses)
+    epe_means = np.array(epe_means)
+
+    # Plot latent histograms
+    dims = latent_codes.shape[1]
+    fig, axes = plt.subplots(max(1, dims), 1, figsize=(6, 3 * dims))
+    if dims == 1:
+        axes = [axes]
+    for i, ax in enumerate(axes):
+        ax.hist(latent_codes[:, i], bins=10, edgecolor='black')
+        ax.set_title(f"Latent dim {i}")
+        ax.set_xlabel("Value")
+        ax.set_ylabel("Frequency")
+    plt.tight_layout()
+    plt.show()
+
+    # Plot reconstruction accuracy histograms
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    ax[0].hist(mses, bins=10, edgecolor='black')
+    ax[0].set_title("Reconstruction MSE across DVFs")
+    ax[0].set_xlabel("MSE")
+    ax[0].set_ylabel("Frequency")
+
+    ax[1].hist(epe_means, bins=10, edgecolor='black')
+    ax[1].set_title("Mean EPE across DVFs")
+    ax[1].set_xlabel("Mean EPE")
+    ax[1].set_ylabel("Frequency")
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print numeric summary
+    print("Reconstruction Accuracy Summary:")
+    for idx, fname in enumerate(file_list):
+        print(f"{os.path.basename(fname)}: MSE={mses[idx]:.4e}, Mean EPE={epe_means[idx]:.4e}")
+
+if __name__ == "__main__":
+    main()
