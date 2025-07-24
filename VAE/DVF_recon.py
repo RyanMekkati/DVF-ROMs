@@ -67,9 +67,10 @@ def main():
     model.eval()
 
     # Containers for results
-    latent_codes = []
-    mses = []
-    epe_means = []
+    latent_codes    = []
+    mses            = []
+    epe_means       = []
+    energy_retained = []
 
     # Process each DVF file
     for fpath in file_list:
@@ -85,7 +86,7 @@ def main():
             recon, mu, logvar = model(tensor)
 
         recon = recon.cpu().numpy().squeeze(0)
-        mu = mu.cpu().numpy().squeeze(0)
+        mu    = mu.cpu().numpy().squeeze(0)
 
         # Compute reconstruction metrics
         err_vec = recon - arr
@@ -93,13 +94,27 @@ def main():
         epe_map = np.linalg.norm(err_vec, axis=0)
         mean_epe = np.mean(epe_map)
 
+        # Compute percent energy retained
+        # move channel to last for norm calculation
+        if recon.ndim == 4:
+            recon_ch_last = np.moveaxis(recon, 0, -1)
+            arr_ch_last   = np.moveaxis(arr,   0, -1)
+        else:
+            recon_ch_last = recon
+            arr_ch_last   = arr
+        E_orig = np.sum(np.linalg.norm(arr_ch_last,   axis=-1) ** 2)
+        E_err  = np.sum(np.linalg.norm(recon_ch_last - arr_ch_last, axis=-1) ** 2)
+        pct_ret = (1.0 - E_err / E_orig) * 100.0
+
         latent_codes.append(mu)
         mses.append(mse)
         epe_means.append(mean_epe)
+        energy_retained.append(pct_ret)
 
-    latent_codes = np.stack(latent_codes, axis=0)
-    mses = np.array(mses)
-    epe_means = np.array(epe_means)
+    latent_codes    = np.stack(latent_codes, axis=0)
+    mses            = np.array(mses)
+    epe_means       = np.array(epe_means)
+    energy_retained = np.array(energy_retained)
 
     # Plot latent histograms
     dims = latent_codes.shape[1]
@@ -115,7 +130,7 @@ def main():
     plt.show()
 
     # Plot reconstruction accuracy histograms
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    fig, ax = plt.subplots(1, 3, figsize=(18, 4))
     ax[0].hist(mses, bins=10, edgecolor='black')
     ax[0].set_title("Reconstruction MSE across DVFs")
     ax[0].set_xlabel("MSE")
@@ -126,13 +141,21 @@ def main():
     ax[1].set_xlabel("Mean EPE")
     ax[1].set_ylabel("Frequency")
 
+    ax[2].hist(energy_retained, bins=10, edgecolor='black')
+    ax[2].set_title("Percent Energy Retained")
+    ax[2].set_xlabel("% Energy Retained")
+    ax[2].set_ylabel("Frequency")
+
     plt.tight_layout()
     plt.show()
 
     # Print numeric summary
-    print("Reconstruction Accuracy Summary:")
+    print("Reconstruction Accuracy & Energy Retention Summary:")
     for idx, fname in enumerate(file_list):
-        print(f"{os.path.basename(fname)}: MSE={mses[idx]:.4e}, Mean EPE={epe_means[idx]:.4e}")
+        print(f"{os.path.basename(fname)}: "
+              f"MSE={mses[idx]:.4e}, "
+              f"Mean EPE={epe_means[idx]:.4e}, "
+              f"Energy Retained={energy_retained[idx]:.2f}%")
 
 if __name__ == "__main__":
     main()
