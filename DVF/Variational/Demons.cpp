@@ -16,22 +16,11 @@
 #include <itkGDCMSeriesFileNames.h>
 #include <itkImageFileReader.h>
 #include <itkDemonsRegistrationFilter.h>
-#include <itkImageToVTKImageFilter.h>
 #include <itkShrinkImageFilter.h>
 #include <itkRegionOfInterestImageFilter.h>
 #include <itkImageFileWriter.h>
 #include <itkImageRegionConstIterator.h>
 
-#include <vtkSmartPointer.h>
-#include <vtkImageData.h>
-#include <vtkArrowSource.h>
-#include <vtkMaskPoints.h>
-#include <vtkGlyph3D.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkActor.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
 
 // Utility to check if a path is a directory
 bool IsDirectory(const std::string &path) {
@@ -49,6 +38,7 @@ int main(int argc, char* argv[])
 {
     bool visualize = false;
     for (int i = 2; i < argc; ++i) {
+        
         if (std::string(argv[i]) == "--viz") {
             visualize = true;
             break;
@@ -85,7 +75,6 @@ int main(int argc, char* argv[])
     using NamesGenType     = itk::GDCMSeriesFileNames;
     using FileReaderType   = itk::ImageFileReader<VolumeType>;
     using DemonsFilterType = itk::DemonsRegistrationFilter<VolumeType,VolumeType,DVFType>;
-    using ITKtoVTKFilter   = itk::ImageToVTKImageFilter<DVFType>;
     using ShrinkerType     = itk::ShrinkImageFilter<VolumeType,VolumeType>;
     using ROIFilterType    = itk::RegionOfInterestImageFilter<VolumeType,VolumeType>;
 
@@ -197,51 +186,6 @@ int main(int argc, char* argv[])
             auto out = outRoot / patientID / oss.str();
             writer->SetFileName(out.string()); writer->SetInput(dvf); writer->UseCompressionOn(); writer->Update();
             manifestOfs << patientID << "," << t << "," << (t+1) << "," << methodTag << "," << out.string() << "\n";
-
-            // VTK visualization
-            ITKtoVTKFilter::Pointer itv = ITKtoVTKFilter::New();
-            itv->SetInput(dvf);
-            itv->Update();
-            vtkImageData* vec = itv->GetOutput();
-
-            auto arrow = vtkSmartPointer<vtkArrowSource>::New();
-            auto mask  = vtkSmartPointer<vtkMaskPoints>::New();
-            mask->SetInputData(vec);
-            mask->SetMaximumNumberOfPoints(10000);
-            mask->RandomModeOn();
-            mask->Update();
-
-            auto glyph  = vtkSmartPointer<vtkGlyph3D>::New();
-            glyph->SetSourceConnection(arrow->GetOutputPort());
-            glyph->SetInputConnection(mask->GetOutputPort());
-            glyph->SetVectorModeToUseVector();
-            glyph->SetScaleFactor(1.0);
-            glyph->Update();
-
-            auto mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-            mapper->SetInputConnection(glyph->GetOutputPort());
-
-            auto actor  = vtkSmartPointer<vtkActor>::New();
-            actor->SetMapper(mapper);
-
-            auto ren = vtkSmartPointer<vtkRenderer>::New();
-            ren->AddActor(actor);
-            ren->SetBackground(0.1,0.1,0.2);
-
-            auto win = vtkSmartPointer<vtkRenderWindow>::New();
-            win->AddRenderer(ren);
-
-            if (visualize) {
-                auto ir = vtkSmartPointer<vtkRenderWindowInteractor>::New();
-                ir->SetRenderWindow(win);
-                win->Render();
-                ir->Start();
-            } else {
-                // batch mode: no GUI popups
-                win->OffScreenRenderingOn();
-                win->Render();
-            }
-
         }
     }
 
