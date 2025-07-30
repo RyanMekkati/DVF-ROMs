@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import glob
 import argparse
@@ -21,13 +20,31 @@ class DVFDataset(Dataset):
 
     def __getitem__(self, idx):
         arr = nib.load(self.paths[idx]).get_fdata(dtype=np.float32)
-        arr = np.squeeze(arr)  # (D,H,W,3)
-        if arr.ndim != 4 or arr.shape[-1] != 3:
-            raise RuntimeError(f"Unexpected DVF shape {arr.shape}")
-        dvf = torch.from_numpy(arr).permute(3,2,1,0).contiguous()  # (C,D,H,W)
+        arr = np.squeeze(arr)       # (D,H,W,3)
+
+        # ---- new crop to multiple of 16 ----
+        D, H, W, C = arr.shape
+        r = D % 16
+        if r != 0:
+            arr = arr[: D - r, ...]  # now D_new = floor(D/16)*16
+
+        dvf = torch.from_numpy(arr).permute(3,0,1,2).contiguous()  # (C,D,H,W)
+
+        # <<< new: trim each spatial dim to a multiple of 16 >>>
+        _, D, H, W = dvf.shape
+        dvf = dvf[
+            :,
+            : (D//16)*16,
+            : (H//16)*16,
+            : (W//16)*16,
+        ]
+
         if self.mean is not None:
             dvf = (dvf - self.mean[:,None,None,None]) / self.std[:,None,None,None]
         return dvf
+
+
+
 
 class BetaVAE3D(nn.Module):
     def __init__(self, in_ch=3, latent_dim=4, grid=(32,64,64)):
@@ -177,4 +194,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
